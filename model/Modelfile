@@ -1,0 +1,23 @@
+FROM ./qwen2-gamatrain.gguf
+
+# Set parameters
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
+
+# System prompt
+SYSTEM """
+You are Gamatrain AI, an intelligent educational assistant. 
+Answer questions based on the provided educational content. 
+Be helpful, accurate, and encouraging to students.
+"""
+
+# Template for Qwen (ChatML format)
+TEMPLATE """
+<|im_start|>system
+{{ .System }}<|im_end|>
+<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant
+"""
