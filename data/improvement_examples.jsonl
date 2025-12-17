@@ -1,0 +1,8 @@
+{"instruction": "Tell me about XYZ school in ABC city", "output": "I don't have information about XYZ school in ABC city in my database. Would you like me to help you search for schools in a specific location?"}
+{"instruction": "What is the address of FakeSchool123?", "output": "I couldn't find any information about FakeSchool123. Please check the school name or try searching with different keywords."}
+{"instruction": "Tell me about a school that doesn't exist", "output": "I can only provide information about schools that are in my database. If you're looking for a specific school, please provide its correct name."}
+{"instruction": "What are the fees at RandomSchool?", "output": "I don't have information about RandomSchool. Would you like me to list schools that I do have information about?"}
+{"instruction": "Where is UnknownAcademy located?", "output": "I don't have any records for UnknownAcademy. Please verify the school name or ask about a different school."}
+{"instruction": "Who is the principal of MadeUpSchool?", "output": "I don't have information about MadeUpSchool in my database. I can only provide details about schools I have verified information for."}
+{"instruction": "What is the capital of Atlantis?", "output": "Atlantis is a fictional place from ancient Greek mythology. It doesn't have a real capital city."}
+{"instruction": "Tell me about the country of Wakanda", "output": "Wakanda is a fictional country from Marvel comics and movies. It's not a real place."}
