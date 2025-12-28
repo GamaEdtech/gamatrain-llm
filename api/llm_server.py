@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from llama_index.core import VectorStoreIndex, Document, Settings, StorageContext, load_index_from_storage
@@ -225,6 +226,101 @@ def build_index(documents: List[Document]):
 # Similarity threshold for RAG
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.75"))
 
+
+async def stream_query(query_text: str, session_id: str = "default", use_rag: bool = True):
+    """Stream response token by token using Server-Sent Events."""
+    import json
+    import asyncio
+    
+    try:
+        if use_rag and index_store:
+            # Get context from RAG
+            history = conversation_memory[session_id]
+            enhanced_query = query_text
+            
+            # Handle follow-up
+            follow_up_words = ["that", "this", "it", "those", "these"]
+            query_lower = query_text.lower()
+            is_follow_up = history and any(word in query_lower.split() for word in follow_up_words)
+            
+            if is_follow_up:
+                last_topic = history[-1].get("topic", "")
+                if last_topic:
+                    enhanced_query = query_lower
+                    for word in follow_up_words:
+                        enhanced_query = enhanced_query.replace(f" {word} ", f" {last_topic} ")
+            
+            # Retrieve context
+            retriever = index_store.as_retriever(similarity_top_k=3)
+            nodes = retriever.retrieve(enhanced_query)
+            
+            if not nodes or max([n.score for n in nodes]) < SIMILARITY_THRESHOLD:
+                no_info_msg = "I don't have information about that in my knowledge base."
+                yield f"data: {json.dumps({'token': no_info_msg, 'done': True})}\n\n"
+                return
+            
+            # Build context for streaming
+            context = "\n".join([n.text for n in nodes[:3]])
+            
+            prompt = f"""Context information is below.
+---------------------
+{context}
+---------------------
+IMPORTANT: Answer the question ONLY using the context above.
+If the answer is NOT in the context, say 'I don't have information about that in my knowledge base.'
+Do NOT make up or invent any information.
+
+Question: {enhanced_query}
+Answer: """
+            
+        else:
+            prompt = query_text
+        
+        # Stream from Ollama
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": MODEL_NAME,
+                    "prompt": prompt,
+                    "stream": True
+                }
+            ) as response:
+                full_response = ""
+                async for line in response.aiter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            token = data.get("response", "")
+                            done = data.get("done", False)
+                            full_response += token
+                            
+                            yield f"data: {json.dumps({'token': token, 'done': done})}\n\n"
+                            
+                            if done:
+                                # Save to memory
+                                topic = ""
+                                if use_rag and nodes:
+                                    best_node = max(nodes, key=lambda n: n.score)
+                                    if "Blog Title:" in best_node.text:
+                                        topic = best_node.text.split("Blog Title:")[1].split("\n")[0].strip()
+                                
+                                conversation_memory[session_id].append({
+                                    "query": query_text,
+                                    "response": full_response,
+                                    "topic": topic
+                                })
+                                
+                                if len(conversation_memory[session_id]) > MAX_MEMORY_TURNS:
+                                    conversation_memory[session_id] = conversation_memory[session_id][-MAX_MEMORY_TURNS:]
+                        except json.JSONDecodeError:
+                            continue
+                            
+    except Exception as e:
+        logger.error(f"Stream error: {e}")
+        yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+
 def query_with_threshold(query_text: str, session_id: str = "default"):
     """Query with similarity threshold check, content verification, and conversation memory."""
     global index_store, llm, query_engine, conversation_memory
@@ -377,7 +473,8 @@ class ChatRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     use_rag: bool = True
-    session_id: str = "default"  # For conversation memory
+    session_id: str = "default"
+    stream: bool = False  # Enable streaming
 
 class RefreshRequest(BaseModel):
     force: bool = False
@@ -462,12 +559,21 @@ async def chat_completions(request: ChatRequest):
 async def query(request: QueryRequest):
     """
     Simple query endpoint for RAG with confidence score and conversation memory.
+    Supports streaming responses.
     """
     if not request.query:
         raise HTTPException(status_code=400, detail="No query provided")
     
-    logger.info(f"Query: {request.query[:50]}... (session: {request.session_id})")
+    logger.info(f"Query: {request.query[:50]}... (session: {request.session_id}, stream: {request.stream})")
     
+    # Streaming response
+    if request.stream:
+        return StreamingResponse(
+            stream_query(request.query, request.session_id, request.use_rag),
+            media_type="text/event-stream"
+        )
+    
+    # Normal response
     try:
         if request.use_rag and query_engine:
             result = query_with_threshold(request.query, request.session_id)
@@ -574,6 +680,27 @@ async def clear_session(session_id: str):
         del conversation_memory[session_id]
         return {"status": "success", "message": f"Session {session_id} cleared"}
     return {"status": "not_found", "message": f"Session {session_id} not found"}
+
+
+@app.get("/v1/stream")
+async def stream_get(query: str, session_id: str = "default"):
+    """
+    Streaming endpoint (GET) - easier to test in browser.
+    Usage: /v1/stream?query=What is Gamatrain?
+    """
+    if not query:
+        raise HTTPException(status_code=400, detail="No query provided")
+    
+    logger.info(f"Stream query: {query[:50]}...")
+    
+    return StreamingResponse(
+        stream_query(query, session_id, use_rag=True),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 # =============================================================================
