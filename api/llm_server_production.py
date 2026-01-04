@@ -60,7 +60,7 @@ API_BASE_URL = os.getenv("GAMATRAIN_API_URL", "https://185.204.170.142/api/v1")
 AUTH_TOKEN = os.getenv("GAMATRAIN_AUTH_TOKEN", "")
 
 # RAG Settings
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.65"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.45"))  # Lowered for better recall
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1024"))
 
 # Logging
@@ -170,15 +170,19 @@ async def call_openrouter_api(prompt: str, max_tokens: int = 1024):
 
 
 async def stream_huggingface_api(prompt: str, max_tokens: int = 1024):
-    """Stream response (simulated streaming)."""
+    """Stream response with realistic typing effect."""
+    import asyncio
+    
     try:
         full_response = await call_llm_api(prompt, max_tokens)
         
-        # Simulate streaming by yielding chunks
+        # Simulate streaming by yielding chunks with delay
         words = full_response.split()
         for i, word in enumerate(words):
             token = word + " " if i < len(words) - 1 else word
             yield f"data: {json.dumps({'token': token, 'done': False})}\n\n"
+            # Add small delay for typing effect (30ms per word)
+            await asyncio.sleep(0.08)
         
         yield f"data: {json.dumps({'token': '', 'done': True})}\n\n"
         
@@ -232,7 +236,7 @@ def fetch_documents():
         with httpx.Client(verify=False, timeout=120) as client:
             resp = client.get(
                 f"{API_BASE_URL}/blogs/posts",
-                params={"PagingDto.PageFilter.Size": 500, "PagingDto.PageFilter.Skip": 0},
+                params={"PagingDto.PageFilter.Size": 2000, "PagingDto.PageFilter.Skip": 0},
                 headers=headers
             )
             if resp.status_code == 200:
@@ -258,6 +262,27 @@ def fetch_documents():
                 logger.info(f"Fetched {len(blogs)} blogs")
     except Exception as e:
         logger.warning(f"Could not fetch blogs: {e}")
+    
+    # Fetch schools
+    try:
+        with httpx.Client(verify=False, timeout=30) as client:
+            resp = client.get(
+                f"{API_BASE_URL}/schools",
+                params={"PagingDto.PageFilter.Size": 100, "PagingDto.PageFilter.Skip": 0},
+                headers=headers
+            )
+            if resp.status_code == 200:
+                schools = resp.json().get("data", {}).get("list", [])
+                for school in schools:
+                    name = school.get("name", "")
+                    if name and "gamatrain" not in name.lower():
+                        documents.append(Document(
+                            text=f"School: {name}\nCity: {school.get('cityTitle', '')}\nCountry: {school.get('countryTitle', '')}",
+                            metadata={"type": "school", "id": str(school.get("id"))}
+                        ))
+                logger.info(f"Fetched {len(schools)} schools")
+    except Exception as e:
+        logger.warning(f"Could not fetch schools: {e}")
     
     return documents
 
@@ -544,6 +569,94 @@ async def refresh_index():
     documents = fetch_documents()
     build_index(documents)
     return {"status": "success", "documents_count": len(documents)}
+
+
+@app.get("/v1/debug/search")
+async def debug_search(q: str):
+    """Debug endpoint to see RAG search results with scores."""
+    global index_store
+    
+    if not index_store:
+        return {"error": "Index not ready"}
+    
+    retriever = index_store.as_retriever(similarity_top_k=10)
+    nodes = retriever.retrieve(q)
+    
+    results = []
+    for node in nodes:
+        results.append({
+            "score": round(node.score, 4),
+            "text_preview": node.text[:300],
+            "metadata": node.metadata,
+            "passes_threshold": node.score >= SIMILARITY_THRESHOLD
+        })
+    
+    return {
+        "query": q,
+        "threshold": SIMILARITY_THRESHOLD,
+        "results_count": len(results),
+        "results": results
+    }
+
+
+@app.get("/v1/debug/find-blog")
+async def find_blog(title: str):
+    """Search for a specific blog by title keyword."""
+    global index_store
+    
+    if not index_store:
+        return {"error": "Index not ready"}
+    
+    # Search with the title
+    retriever = index_store.as_retriever(similarity_top_k=20)
+    nodes = retriever.retrieve(title)
+    
+    # Filter to only blogs
+    blog_results = []
+    for node in nodes:
+        if node.metadata.get("type") == "blog":
+            blog_results.append({
+                "score": round(node.score, 4),
+                "text_preview": node.text[:400],
+                "id": node.metadata.get("id")
+            })
+    
+    return {
+        "search_title": title,
+        "blogs_found": len(blog_results),
+        "results": blog_results[:10]
+    }
+
+
+@app.get("/v1/debug/list-blogs")
+async def list_blogs(search: str = ""):
+    """List all blog titles in the index."""
+    headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+    
+    try:
+        with httpx.Client(verify=False, timeout=120) as client:
+            resp = client.get(
+                f"{API_BASE_URL}/blogs/posts",
+                params={"PagingDto.PageFilter.Size": 2000, "PagingDto.PageFilter.Skip": 0},
+                headers=headers
+            )
+            if resp.status_code == 200:
+                blogs = resp.json().get("data", {}).get("list", [])
+                
+                # Filter by search term if provided
+                if search:
+                    blogs = [b for b in blogs if search.lower() in b.get("title", "").lower()]
+                
+                titles = [{"id": b.get("id"), "title": b.get("title")} for b in blogs[:100]]
+                
+                return {
+                    "total_blogs": len(resp.json().get("data", {}).get("list", [])),
+                    "filtered_count": len(titles),
+                    "search_term": search,
+                    "blogs": titles
+                }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # =============================================================================
