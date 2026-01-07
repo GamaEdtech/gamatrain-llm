@@ -1,136 +1,67 @@
 # Gamatrain AI Server
 
-🤖 سرور هوش مصنوعی آموزشی Gamatrain با قابلیت RAG، حافظه مکالمه و اجرا بدون GPU.
+FastAPI server with RAG, conversation memory, and multi-provider LLM support.
 
-## ✨ قابلیت‌ها
+## Features
 
-### RAG (Retrieval-Augmented Generation)
-- جستجوی هوشمند در 2000+ بلاگ و محتوای وبسایت
-- استفاده از embedding model چندزبانه (`intfloat/multilingual-e5-large`)
-- ذخیره‌سازی index برای سرعت بالاتر
+- **RAG (Retrieval-Augmented Generation)**: Smart search across 2000+ blogs
+- **Conversation Memory**: Remembers last 5 messages per session
+- **Follow-up Detection**: Handles "tell me more" style questions
+- **Multi-Provider**: Supports Ollama (local), Groq (cloud), OpenRouter
+- **Streaming**: Real-time token streaming for better UX
 
-### Conversation Memory
-- ذخیره 5 پیام آخر هر session
-- پشتیبانی از سوالات follow-up مثل "Can you explain more?"
-- تشخیص خودکار سوالات مرتبط با مکالمه قبلی
+## Quick Start
 
-### Production Ready
-- اجرا بدون نیاز به GPU
-- استفاده از Groq API (رایگان و سریع)
-- Streaming response با انیمیشن تایپ
-
-## 🏗️ معماری
-
-```
-Frontend (Nuxt) → Production Server (CPU) → Groq API
-                         ↓
-                  RAG + Memory + Follow-up
-                  (LlamaIndex + Embeddings)
-                         ↓
-                  Gamatrain API (Blogs, Schools)
-```
-
-## 🚀 نصب و اجرا
-
-### Development
+### Development (with Ollama)
 
 ```bash
-cd api
+pip install -r requirements.txt
+python llm_server.py
+# Server runs on http://localhost:8000
+```
+
+### Production (with Groq - Free)
+
+```bash
+cp .env.production.example .env
+# Edit .env and add your GROQ_API_KEY
+
 pip install -r requirements-production.txt
-cp .env.example .env
-# Edit .env with your GROQ_API_KEY
 python llm_server_production.py
+# Server runs on http://localhost:8002
 ```
 
-### Docker
-
-```bash
-docker-compose -f docker-compose.production.yml up -d
-```
-
-## ⚙️ تنظیمات (.env)
-
-```env
-# Provider
-PROVIDER=groq
-
-# Groq API (FREE - https://console.groq.com)
-GROQ_API_KEY=your_key_here
-GROQ_MODEL=llama-3.1-8b-instant
-
-# Server
-HOST=0.0.0.0
-PORT=8002
-
-# RAG
-SIMILARITY_THRESHOLD=0.45
-MAX_TOKENS=1024
-
-# Gamatrain API
-GAMATRAIN_API_URL=https://185.204.170.142/api/v1
-```
-
-## 📡 API Endpoints
+## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/v1/query` | ارسال سوال (با streaming) |
+| `POST` | `/v1/query` | Query with RAG and streaming |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible endpoint |
-| `POST` | `/v1/refresh` | بروزرسانی RAG index |
-| `DELETE` | `/v1/session/{id}` | پاک کردن حافظه session |
-| `GET` | `/health` | بررسی سلامت سرور |
-| `GET` | `/v1/debug/search?q=...` | Debug: جستجو با score |
-| `GET` | `/v1/debug/list-blogs?search=...` | Debug: لیست بلاگ‌ها |
+| `POST` | `/v1/refresh` | Refresh RAG index |
+| `DELETE` | `/v1/session/{id}` | Clear session memory |
+| `GET` | `/health` | Health check |
+| `GET` | `/v1/debug/search?q=...` | Debug: search with scores |
 
-### نمونه Request
+## Example Request
 
 ```bash
-# Query with streaming
 curl -X POST "http://localhost:8002/v1/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "What is machine learning?", "session_id": "user123"}'
-
-# Refresh index
-curl -X POST "http://localhost:8002/v1/refresh"
 ```
 
-## 📁 ساختار فایل‌ها
+## Environment Variables
 
-```
-api/
-├── llm_server_production.py  # سرور اصلی (بدون GPU)
-├── llm_server.py             # سرور توسعه (با Ollama)
-├── requirements-production.txt
-├── .env
-└── storage/                  # RAG index cache
-```
+See `.env.production.example` for all available options.
 
-## 📝 نکات مهم
+Key variables:
+- `PROVIDER`: `ollama`, `groq`, or `openrouter`
+- `GROQ_API_KEY`: Get free key from https://console.groq.com
+- `SIMILARITY_THRESHOLD`: RAG confidence threshold (default: 0.45)
 
-1. **Refresh Index**: بعد از اضافه شدن بلاگ جدید:
-   ```bash
-   curl -X POST "http://localhost:8002/v1/refresh"
-   ```
+## Files
 
-2. **Groq API**: رایگان است ولی rate limit دارد (30 req/min)
-
-3. **Embedding Model**: اولین اجرا ~2GB دانلود میکند
-
-4. **Session Management**: هر کاربر باید `session_id` یکتا داشته باشد
-
-## 🔧 Troubleshooting
-
-**مشکل: RAG محتوا پیدا نمیکند**
-- Index را refresh کنید
-- Threshold را کاهش دهید (پیشنهاد: 0.45)
-
-**مشکل: پاسخ کوتاه است**
-- `MAX_TOKENS` را افزایش دهید
-
-**مشکل: خطای API**
-- `GROQ_API_KEY` را بررسی کنید
-- Rate limit را چک کنید
-
-## 📄 License
-
-MIT
+- `llm_server.py` - Development server (uses local Ollama)
+- `llm_server_production.py` - Production server (multi-provider)
+- `requirements.txt` - Development dependencies
+- `requirements-production.txt` - Production dependencies

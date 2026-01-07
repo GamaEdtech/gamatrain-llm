@@ -28,8 +28,15 @@ Thumbs.db
 
 # Logs
 *.log
+test_report_*.json
+test_random_blogs_*.json
 
 # Environment
 .env
+.env.local
 token.txt
 gpg
+
+# Storage (regenerated on startup)
+storage/
+api/storage/

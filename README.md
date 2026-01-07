@@ -1,26 +1,25 @@
-# Gamatrain AI Research 🤖
+# Gamatrain AI - Educational LLM with RAG 🤖
 
 Fine-tuned LLM (Qwen2-1.5B) with RAG-powered API for Gamatrain's educational platform.
 
-## 🎯 Project Goal
+## 🎯 Overview
 
-Create an AI assistant that can:
-- Answer questions about Gamatrain's educational content (courses, tests, blogs)
-- Use RAG (Retrieval-Augmented Generation) for accurate, context-aware responses
-- Maintain conversation memory for follow-up questions
-- Prevent hallucination with similarity threshold checks
-- Be deployed locally using Ollama
+An AI assistant that:
+- Answers questions about Gamatrain's educational content (courses, tests, blogs)
+- Uses RAG (Retrieval-Augmented Generation) for accurate, context-aware responses
+- Maintains conversation memory for follow-up questions
+- Prevents hallucination with similarity threshold checks
 
 ## ✨ Features
 
 | Feature | Description |
 |---------|-------------|
 | **Fine-tuned LLM** | Qwen2-1.5B trained on Gamatrain content |
-| **RAG Integration** | LlamaIndex-powered retrieval from blogs, schools, FAQs |
+| **RAG Integration** | LlamaIndex-powered retrieval from 2000+ blogs |
 | **Anti-Hallucination** | Similarity threshold + entity verification |
 | **Conversation Memory** | Remembers context for follow-up questions |
 | **OpenAI-Compatible API** | Drop-in replacement for OpenAI endpoints |
-| **Auto-sync** | Fetches latest content from Gamatrain API |
+| **Multi-Provider** | Supports Ollama (local), Groq, OpenRouter |
 
 ## 📊 Model Stats
 
@@ -33,149 +32,153 @@ Create an AI assistant that can:
 | Output Format | GGUF (4-bit quantized) |
 | RAG Test Pass Rate | 92.9% |
 
-## 🗂️ Repository Structure
+## 🗂️ Project Structure
 
 ```
 gamatrain-ai-research/
 ├── api/
-│   ├── llm_server.py          # FastAPI + RAG server
-│   └── requirements.txt
+│   ├── llm_server.py              # Development server (Ollama)
+│   ├── llm_server_production.py   # Production server (Groq/OpenRouter)
+│   ├── requirements.txt
+│   └── requirements-production.txt
 ├── data/
-│   ├── custom_docs.json       # Custom documents for RAG
+│   ├── custom_docs.json           # Custom RAG documents
 │   ├── gamatrain_final_dataset.jsonl
-│   └── scripts/               # Data extraction scripts
+│   └── scripts/                   # Data extraction scripts
 ├── model/
-│   ├── Modelfile              # Ollama configuration
-│   ├── qwen2-gamatrain.gguf   # Fine-tuned model
-│   └── README.md
+│   ├── Modelfile                  # Ollama configuration
+│   └── README.md                  # Model download instructions
 ├── scripts/
-│   └── test_model_and_rag.py  # Test suite
-├── storage/                   # RAG vector store
+│   ├── test_model_and_rag.py      # Main test suite
+│   └── test_random_blogs.py       # Random blog RAG tests
 ├── notebooks/
-│   └── fine-tuning-demo.ipynb
-└── docs/
-    ├── RESEARCH.md
-    ├── TRAINING.md
-    └── DEPLOYMENT.md
+│   └── fine-tuning-complete.ipynb # Training notebook (Colab)
+├── docs/
+│   ├── DEPLOYMENT.md
+│   ├── RESEARCH.md
+│   └── TRAINING.md
+├── docker-compose.production.yml
+└── Dockerfile.production
 ```
+
 
 ## 🚀 Quick Start
 
-### 1. Setup Model
-```bash
-# Download model (see model/README.md)
-cd model/
-ollama create gamatrain-qwen -f Modelfile
-```
+### Option 1: Local Development (with Ollama)
 
-### 2. Start API Server
 ```bash
+# 1. Install Ollama
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# 2. Import the fine-tuned model
+cd model/
+# Place qwen2-gamatrain.gguf here (see model/README.md)
+ollama create gamatrain-qwen -f Modelfile
+
+# 3. Start the API server
 cd api/
 pip install -r requirements.txt
 python llm_server.py
+# Server runs on http://localhost:8000
 ```
 
-### 3. Test Endpoints
+### Option 2: Production (No GPU Required)
+
+Uses cloud LLM providers (Groq is free and fast).
+
 ```bash
-# Simple query
-curl -X POST http://localhost:8000/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is Gamatrain?"}'
+# 1. Setup environment
+cd api/
+cp .env.production.example .env
+# Edit .env and add your GROQ_API_KEY (free at https://console.groq.com)
 
-# With conversation memory
-curl -X POST http://localhost:8000/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is the Oil blog about?", "session_id": "user1"}'
+# 2. Install and run
+pip install -r requirements-production.txt
+python llm_server_production.py
+# Server runs on http://localhost:8001
+```
 
-curl -X POST http://localhost:8000/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Tell me more about that", "session_id": "user1"}'
+### Option 3: Docker
+
+```bash
+docker-compose -f docker-compose.production.yml up -d
 ```
 
 ## 🔌 API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/v1/query` | POST | RAG query with confidence score |
+| `/v1/query` | POST | RAG query with streaming |
 | `/v1/chat/completions` | POST | OpenAI-compatible chat |
-| `/v1/documents/add` | POST | Add document to RAG |
-| `/v1/documents/count` | GET | Get document count |
 | `/v1/refresh` | POST | Refresh RAG index |
 | `/v1/session/{id}` | DELETE | Clear conversation memory |
 | `/health` | GET | Health check |
 
-## 📝 Query Response Example
+### Example Requests
+
+```bash
+# Simple query
+curl -X POST http://localhost:8000/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is Gamatrain?", "session_id": "user1"}'
+
+# Follow-up question (uses conversation memory)
+curl -X POST http://localhost:8000/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Tell me more about that", "session_id": "user1"}'
+
+# Refresh RAG index (after new content is added)
+curl -X POST http://localhost:8000/v1/refresh
+```
+
+### Response Format
 
 ```json
 {
   "query": "What is Gamatrain?",
-  "response": "Gamatrain is an educational technology company (EdTech) that provides AI-powered learning tools.",
+  "response": "Gamatrain is an educational technology company...",
   "confidence": "high",
   "similarity_score": 0.897,
-  "session_id": "default",
-  "source": "rag"
+  "session_id": "user1"
 }
-```
-
-## 🛡️ Anti-Hallucination
-
-The system prevents made-up responses through:
-
-1. **Similarity Threshold (0.75)** - Low-confidence queries return "I don't know"
-2. **Entity Verification** - Checks if mentioned names exist in context
-3. **Strict Prompting** - Instructs model to only use provided context
-
-```bash
-# Example: Asking about non-existent school
-curl -X POST http://localhost:8000/v1/query \
-  -d '{"query": "Tell me about XYZ123 school"}'
-
-# Response:
-{"response": "I don't have specific information about XYZ123 in my knowledge base."}
-```
-
-## 🔄 Adding Custom Data
-
-### Option 1: JSON File
-Edit `data/custom_docs.json`:
-```json
-{
-  "documents": [
-    {"text": "Your content here...", "type": "faq", "id": "faq_001"}
-  ]
-}
-```
-Then refresh: `curl -X POST http://localhost:8000/v1/refresh -d '{"force": true}'`
-
-### Option 2: API
-```bash
-curl -X POST http://localhost:8000/v1/documents/add \
-  -H "Content-Type: application/json" \
-  -d '{"text": "New document content", "doc_type": "faq"}'
 ```
 
 ## ⚙️ Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_NAME` | gamatrain-qwen | Ollama model name |
-| `OLLAMA_BASE_URL` | http://localhost:11434 | Ollama API URL |
-| `PORT` | 8000 | API server port |
-| `SIMILARITY_THRESHOLD` | 0.75 | RAG confidence threshold |
-| `STORAGE_DIR` | ./storage | Vector store location |
+| `PROVIDER` | ollama | LLM provider: `ollama`, `groq`, `openrouter` |
+| `GROQ_API_KEY` | - | Groq API key (free tier available) |
+| `GROQ_MODEL` | llama-3.1-8b-instant | Model to use with Groq |
+| `OLLAMA_MODEL` | gamatrain-qwen | Local Ollama model name |
+| `SIMILARITY_THRESHOLD` | 0.45 | RAG confidence threshold |
+| `MAX_TOKENS` | 1024 | Maximum response tokens |
+| `PORT` | 8000/8001 | Server port |
+
+## 🛡️ Anti-Hallucination
+
+The system prevents made-up responses through:
+
+1. **Similarity Threshold** - Low-confidence queries return "I don't know"
+2. **Entity Verification** - Checks if mentioned entities exist in context
+3. **Strict Prompting** - Instructs model to only use provided context
 
 ## 🧪 Running Tests
 
 ```bash
+# Main test suite
 python scripts/test_model_and_rag.py
+
+# Random blog RAG tests
+python scripts/test_random_blogs.py
 ```
 
-Test categories:
-- Identity (Who are you?)
-- RAG Retrieval
-- Hallucination Prevention
-- Educational Knowledge
-- Response Quality
+## 📚 Documentation
+
+- [PRODUCTION.md](docs/PRODUCTION.md) - **Production deployment guide** (recommended)
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) - Basic deployment guide
+- [TRAINING.md](docs/TRAINING.md) - Fine-tuning guide
+- [RESEARCH.md](docs/RESEARCH.md) - Research findings
 
 ## ⚠️ Key Learning: Catastrophic Forgetting
 
@@ -187,16 +190,6 @@ Fine-tuning only on domain data caused the model to "forget" basic abilities.
 |--------|-------|
 | `2 + 2 = 0` ❌ | `2 + 2 = 4` ✅ |
 
-## 📚 Documentation
-
-- [RESEARCH.md](docs/RESEARCH.md) - Problem statement & findings
-- [TRAINING.md](docs/TRAINING.md) - Fine-tuning guide
-- [DEPLOYMENT.md](docs/DEPLOYMENT.md) - Deployment guide
-
 ## 📄 License
 
 MIT License
-
-## 🤝 Contributing
-
-Contributions welcome! Please read the documentation first.
