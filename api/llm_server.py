@@ -301,14 +301,23 @@ async def stream_query(query_text: str, session_id: str = "default", use_rag: bo
             # This is definitely a follow-up, use last conversation directly
             last_entry = history[-1]
             last_query = last_entry.get("query", "")
-            last_response = last_entry.get("response", "")[:600]
+            last_response = last_entry.get("response", "")[:800]
+            last_topic = last_entry.get("topic", last_query)
             
-            logger.info(f"Explicit follow-up detected. Continuing from: '{last_query[:50]}...'")
+            logger.info(f"Explicit follow-up detected. Topic: '{last_topic[:50]}...', Last query: '{last_query[:50]}...'")
             
-            # Simple prompt to avoid model echoing
-            prompt = f"""Based on this context: {last_response}
+            # Build a clear prompt that maintains context
+            prompt = f"""You are Gamatrain AI, an educational assistant.
 
-Explain more about this topic in detail."""
+The user previously asked: "{last_query}"
+
+You answered: {last_response}
+
+Now the user wants to know more about this same topic. Provide additional details, examples, or explanations about {last_topic if last_topic else "the topic"}.
+
+User's follow-up question: {query_text}
+
+Continue explaining in detail:"""
             
             # Stream directly without RAG
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -320,7 +329,8 @@ Explain more about this topic in detail."""
                         "prompt": prompt,
                         "stream": True,
                         "options": {
-                            "num_predict": 1024  # Max tokens to generate
+                            "num_predict": 1024,
+                            "temperature": 0.7
                         }
                     }
                 ) as response:
@@ -339,7 +349,7 @@ Explain more about this topic in detail."""
                                     conversation_memory[session_id].append({
                                         "query": query_text,
                                         "response": full_response,
-                                        "topic": last_entry.get("topic", last_query)
+                                        "topic": last_topic
                                     })
                                     if len(conversation_memory[session_id]) > MAX_MEMORY_TURNS:
                                         conversation_memory[session_id] = conversation_memory[session_id][-MAX_MEMORY_TURNS:]

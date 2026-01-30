@@ -423,7 +423,19 @@ async def rewrite_query_with_context(query: str, history: list) -> tuple:
     
     query_lower = query.lower().strip()
     
-    # Check for follow-up indicators
+    # Check for explicit follow-up phrases first
+    explicit_followup_phrases = ["tell me more", "explain more", "can you explain", "more details", 
+                                  "more information", "go on", "continue", "elaborate"]
+    is_explicit = any(phrase in query_lower for phrase in explicit_followup_phrases)
+    
+    if is_explicit:
+        # For explicit follow-ups, use the last topic directly
+        last_entry = history[-1]
+        last_topic = last_entry.get("topic", last_entry.get("query", ""))
+        logger.info(f"Explicit follow-up detected about: {last_topic[:50]}...")
+        return f"Explain more about {last_topic}", True
+    
+    # Check for follow-up indicators (pronouns)
     follow_up_words = ["it", "its", "this", "that", "they", "their", "there", "here"]
     
     # Check if query contains follow-up words as separate words
@@ -487,6 +499,34 @@ async def process_query(query_text: str, session_id: str = "default", use_rag: b
     if is_general:
         prompt = f"You are Gamatrain AI, a friendly educational assistant. Respond briefly: {query_text}"
         return prompt, None
+    
+    # Check for explicit follow-up phrases
+    explicit_followup_phrases = ["tell me more", "explain more", "can you explain", "more details", 
+                                  "more information", "go on", "continue", "elaborate"]
+    is_explicit_followup = any(phrase in query_lower for phrase in explicit_followup_phrases)
+    
+    # For explicit follow-ups, use conversation history directly
+    if is_explicit_followup and history:
+        last_entry = history[-1]
+        last_query = last_entry.get("query", "")
+        last_response = last_entry.get("response", "")[:800]
+        last_topic = last_entry.get("topic", last_query)
+        
+        logger.info(f"Explicit follow-up about: {last_topic[:50]}...")
+        
+        prompt = f"""You are Gamatrain AI, an educational assistant.
+
+The user previously asked: "{last_query}"
+
+You answered: {last_response}
+
+Now the user wants more information about this same topic ({last_topic}).
+
+User's follow-up: {query_text}
+
+Provide additional details and explanations:"""
+        
+        return prompt, last_topic
     
     # Use LLM to rewrite query if there's conversation history
     search_query = query_text
