@@ -20,6 +20,7 @@ import uvicorn
 import httpx
 import logging
 import json
+import asyncio
 from typing import List, Optional
 from contextlib import asynccontextmanager
 from collections import defaultdict
@@ -481,6 +482,93 @@ async def rewrite_query_with_context(query: str, history: list) -> tuple:
     return rewritten, True
 
 
+def filter_external_links(text: str) -> str:
+    """Remove external links from response, keep only gamatrain.com links."""
+    import re
+    
+    # Pattern 1: Match full URLs (http://... or https://...)
+    # But NOT gamatrain.com
+    external_url_pattern1 = r'https?://(?!(?:www\.)?gamatrain\.com)[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}[^\s\)]*'
+    
+    # Pattern 2: Match www.example.com (without http)
+    external_url_pattern2 = r'www\.(?!gamatrain\.com)[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}[^\s\)]*'
+    
+    # Remove external URLs (replace with empty string, preserving spaces)
+    cleaned_text = re.sub(external_url_pattern1, '', text)
+    cleaned_text = re.sub(external_url_pattern2, '', cleaned_text)
+    
+    # DON'T clean up spaces - that was causing the problem!
+    # Just return as-is
+    return cleaned_text
+
+
+def extract_source_links(nodes, base_url: str = "https://gamatrain.com"):
+    """Extract blog/school links from RAG nodes."""
+    sources = []
+    for node in nodes[:3]:  # Top 3 sources
+        metadata = node.metadata
+        doc_type = metadata.get("type", "")
+        
+        if doc_type == "blog":
+            slug = metadata.get("slug", "")
+            blog_id = metadata.get("id", "")
+            if slug and blog_id:
+                # Extract title from text
+                text = node.text
+                title = ""
+                if "Blog Title:" in text:
+                    title = text.split("Blog Title:")[1].split("\n")[0].strip()
+                
+                # Correct format: /blog/ID/slug
+                sources.append({
+                    "type": "blog",
+                    "title": title or "Blog Post",
+                    "url": f"{base_url}/blog/{blog_id}/{slug}",
+                    "score": round(node.score, 3)
+                })
+        elif doc_type == "school":
+            slug = metadata.get("slug", "")
+            if slug:
+                # Extract school name
+                text = node.text
+                name = ""
+                if "School Name:" in text:
+                    name = text.split("School Name:")[1].split("\n")[0].strip()
+                
+                sources.append({
+                    "type": "school",
+                    "title": name or "School",
+                    "url": f"{base_url}/schools/{slug}",
+                    "score": round(node.score, 3)
+                })
+    
+    return sources
+
+
+def format_sources_text(sources):
+    """Format sources as readable text for LLM response."""
+    if not sources:
+        return ""
+    
+    text = "\n\n" + "="*60 + "\n"
+    text += "📚 منابع مرتبط / Related Sources\n"
+    text += "="*60 + "\n\n"
+    
+    for i, source in enumerate(sources, 1):
+        if source["type"] == "blog":
+            text += f"{i}. 📝 {source['title']}\n"
+            text += f"   🔗 {source['url']}\n\n"
+        elif source["type"] == "school":
+            text += f"{i}. 🏫 {source['title']}\n"
+            text += f"   🔗 {source['url']}\n\n"
+    
+    text += "="*60 + "\n"
+    text += "💡 کلیک روی لینک‌ها برای مطالعه بیشتر\n"
+    text += "="*60
+    
+    return text
+
+
 # =============================================================================
 # Query Processing (with RAG + Memory + Follow-up)
 # =============================================================================
@@ -567,11 +655,22 @@ Answer based on the context above. Be specific and include exact numbers if avai
 
 
 async def stream_query(query_text: str, session_id: str = "default", use_rag: bool = True):
-    """Stream response with RAG and memory."""
+    """Stream response with RAG, memory, and source citations."""
     global conversation_memory
     
     # Process query
     prompt, topic = await process_query(query_text, session_id, use_rag)
+    
+    # Get sources if RAG was used
+    sources = []
+    if use_rag and index_store:
+        try:
+            retriever = index_store.as_retriever(similarity_top_k=3)
+            nodes = retriever.retrieve(query_text)
+            if nodes and max([n.score for n in nodes]) >= SIMILARITY_THRESHOLD:
+                sources = extract_source_links(nodes)
+        except:
+            pass
     
     # Stream from HuggingFace
     full_response = ""
@@ -585,11 +684,26 @@ async def stream_query(query_text: str, session_id: str = "default", use_rag: bo
             pass
         yield chunk
     
+    # Add sources at the end if available
+    if sources:
+        sources_text = format_sources_text(sources)
+        # Stream the sources
+        for char in sources_text:
+            yield f"data: {json.dumps({'token': char, 'done': False})}\n\n"
+            await asyncio.sleep(0.01)
+        
+        full_response += sources_text
+        yield f"data: {json.dumps({'token': '', 'done': True, 'sources': sources})}\n\n"
+    else:
+        # Filter out external links if no sources found
+        full_response = filter_external_links(full_response)
+    
     # Save to memory
     conversation_memory[session_id].append({
         "query": query_text,
         "response": full_response,
-        "topic": topic or query_text
+        "topic": topic or query_text,
+        "sources": sources if sources else []
     })
     
     if len(conversation_memory[session_id]) > MAX_MEMORY_TURNS:
@@ -847,6 +961,137 @@ async def list_blogs(search: str = ""):
                 }
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/v1/debug/list-blogs")
+async def list_blogs(search: str = ""):
+    """List all blog titles in the index."""
+    headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+    
+    try:
+        with httpx.Client(verify=False, timeout=120) as client:
+            resp = client.get(
+                f"{API_BASE_URL}/blogs/posts",
+                params={"PagingDto.PageFilter.Size": 2000, "PagingDto.PageFilter.Skip": 0},
+                headers=headers
+            )
+            if resp.status_code == 200:
+                blogs = resp.json().get("data", {}).get("list", [])
+                
+                # Filter by search term if provided
+                if search:
+                    blogs = [b for b in blogs if search.lower() in b.get("title", "").lower()]
+                
+                titles = [{"id": b.get("id"), "title": b.get("title")} for b in blogs[:100]]
+                
+                return {
+                    "total_blogs": len(resp.json().get("data", {}).get("list", [])),
+                    "filtered_count": len(titles),
+                    "search_term": search,
+                    "blogs": titles
+                }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/v1/search/blogs")
+async def search_blogs(q: str, limit: int = 5):
+    """
+    Search for blogs related to a query and return links.
+    Usage: /v1/search/blogs?q=photosynthesis&limit=5
+    """
+    if not q or len(q) < 2:
+        raise HTTPException(status_code=400, detail="Query too short")
+    
+    if not index_store:
+        raise HTTPException(status_code=503, detail="Index not ready")
+    
+    try:
+        # Search in RAG index
+        retriever = index_store.as_retriever(similarity_top_k=limit * 2)
+        nodes = retriever.retrieve(q)
+        
+        # Filter only blogs
+        blog_results = []
+        for node in nodes:
+            if node.metadata.get("type") == "blog":
+                text = node.text
+                title = ""
+                slug = node.metadata.get("slug", "")
+                
+                if "Blog Title:" in text:
+                    title = text.split("Blog Title:")[1].split("\n")[0].strip()
+                
+                if slug and title:
+                    blog_results.append({
+                        "title": title,
+                        "url": f"https://gamatrain.com/blog/{slug}",
+                        "slug": slug,
+                        "relevance_score": round(node.score, 3),
+                        "preview": text[:200].replace("Blog Title:", "").strip()
+                    })
+                
+                if len(blog_results) >= limit:
+                    break
+        
+        return {
+            "query": q,
+            "results_count": len(blog_results),
+            "blogs": blog_results
+        }
+    except Exception as e:
+        logger.error(f"Blog search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/search/schools")
+async def search_schools(q: str, limit: int = 5):
+    """
+    Search for schools related to a query and return links.
+    Usage: /v1/search/schools?q=MIT&limit=5
+    """
+    if not q or len(q) < 2:
+        raise HTTPException(status_code=400, detail="Query too short")
+    
+    if not index_store:
+        raise HTTPException(status_code=503, detail="Index not ready")
+    
+    try:
+        # Search in RAG index
+        retriever = index_store.as_retriever(similarity_top_k=limit * 2)
+        nodes = retriever.retrieve(q)
+        
+        # Filter only schools
+        school_results = []
+        for node in nodes:
+            if node.metadata.get("type") == "school":
+                text = node.text
+                name = ""
+                slug = node.metadata.get("slug", "")
+                
+                if "School Name:" in text:
+                    name = text.split("School Name:")[1].split("\n")[0].strip()
+                
+                if slug and name:
+                    school_results.append({
+                        "name": name,
+                        "url": f"https://gamatrain.com/schools/{slug}",
+                        "slug": slug,
+                        "relevance_score": round(node.score, 3),
+                        "info": text[:200].replace("School Name:", "").strip()
+                    })
+                
+                if len(school_results) >= limit:
+                    break
+        
+        return {
+            "query": q,
+            "results_count": len(school_results),
+            "schools": school_results
+        }
+    except Exception as e:
+        logger.error(f"School search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================

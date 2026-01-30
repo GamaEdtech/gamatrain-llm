@@ -244,13 +244,101 @@ def build_index(documents: List[Document]):
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.65"))  # Lowered from 0.75
 
 
+def filter_external_links(text: str) -> str:
+    """Remove external links from response, keep only gamatrain.com links."""
+    import re
+    
+    # Pattern 1: Match full URLs (http://... or https://...)
+    # But NOT gamatrain.com
+    external_url_pattern1 = r'https?://(?!(?:www\.)?gamatrain\.com)[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}[^\s\)]*'
+    
+    # Pattern 2: Match www.example.com (without http)
+    external_url_pattern2 = r'www\.(?!gamatrain\.com)[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}[^\s\)]*'
+    
+    # Remove external URLs (replace with empty string, preserving spaces)
+    cleaned_text = re.sub(external_url_pattern1, '', text)
+    cleaned_text = re.sub(external_url_pattern2, '', cleaned_text)
+    
+    # DON'T clean up spaces - that was causing the problem!
+    # Just return as-is
+    return cleaned_text
+
+
+def extract_source_links(nodes, base_url: str = "https://gamatrain.com"):
+    """Extract blog/school links from RAG nodes."""
+    sources = []
+    for node in nodes[:3]:  # Top 3 sources
+        metadata = node.metadata
+        doc_type = metadata.get("type", "")
+        
+        if doc_type == "blog":
+            slug = metadata.get("slug", "")
+            blog_id = metadata.get("id", "")
+            if slug and blog_id:
+                # Extract title from text
+                text = node.text
+                title = ""
+                if "Blog Title:" in text:
+                    title = text.split("Blog Title:")[1].split("\n")[0].strip()
+                
+                # Correct format: /blog/ID/slug
+                sources.append({
+                    "type": "blog",
+                    "title": title or "Blog Post",
+                    "url": f"{base_url}/blog/{blog_id}/{slug}",
+                    "score": round(node.score, 3)
+                })
+        elif doc_type == "school":
+            slug = metadata.get("slug", "")
+            if slug:
+                # Extract school name
+                text = node.text
+                name = ""
+                if "School Name:" in text:
+                    name = text.split("School Name:")[1].split("\n")[0].strip()
+                
+                sources.append({
+                    "type": "school",
+                    "title": name or "School",
+                    "url": f"{base_url}/schools/{slug}",
+                    "score": round(node.score, 3)
+                })
+    
+    return sources
+
+
+def format_sources_text(sources):
+    """Format sources as readable text for LLM response."""
+    if not sources:
+        return ""
+    
+    text = "\n\n" + "="*60 + "\n"
+    text += "📚 منابع مرتبط / Related Sources\n"
+    text += "="*60 + "\n\n"
+    
+    for i, source in enumerate(sources, 1):
+        if source["type"] == "blog":
+            text += f"{i}. 📝 {source['title']}\n"
+            text += f"   🔗 {source['url']}\n\n"
+        elif source["type"] == "school":
+            text += f"{i}. 🏫 {source['title']}\n"
+            text += f"   🔗 {source['url']}\n\n"
+    
+    text += "="*60 + "\n"
+    text += "💡 کلیک روی لینک‌ها برای مطالعه بیشتر\n"
+    text += "="*60
+    
+    return text
+
+
 async def stream_query(query_text: str, session_id: str = "default", use_rag: bool = True):
-    """Stream response token by token using Server-Sent Events."""
+    """Stream response token by token using Server-Sent Events with source citations."""
     import json
     import asyncio
     
     query_lower = query_text.lower().strip()
     nodes = []  # Initialize nodes to avoid reference error
+    sources = []  # Store source links
     
     # Detect general/greeting queries that don't need RAG
     general_patterns = ['hi', 'hello', 'hey', 'good morning', 'good evening', 'how are you', 
@@ -359,7 +447,7 @@ Continue explaining in detail:"""
         
         if is_general and not is_follow_up:
             # Use direct LLM for greetings/general chat
-            prompt = f"You are Gamatrain AI, a friendly educational assistant. Respond briefly and helpfully to: {query_text}"
+            prompt = f"You are Gamatrain AI, a friendly educational assistant. Respond briefly and helpfully to: {query_text}\n\nIMPORTANT: Do NOT include any external URLs or links."
         elif context_from_history and not is_general:
             # Answer based on conversation history
             logger.info("Using conversation history to answer")
@@ -436,6 +524,10 @@ If the information above doesn't contain the answer, say so honestly."""
             retriever = index_store.as_retriever(similarity_top_k=3)
             nodes = retriever.retrieve(enhanced_query)
             
+            # Extract source links from nodes
+            if nodes and max([n.score for n in nodes]) >= SIMILARITY_THRESHOLD:
+                sources = extract_source_links(nodes)
+            
             if not nodes or max([n.score for n in nodes]) < SIMILARITY_THRESHOLD:
                 # For follow-ups with no RAG match, use conversation history
                 if is_follow_up and history:
@@ -450,7 +542,7 @@ Now the user asks: {query_text}
 
 Please continue the conversation and provide more details based on your previous answer."""
                 else:
-                    prompt = f"You are Gamatrain AI, an educational assistant. Answer this question: {query_text}"
+                    prompt = f"You are Gamatrain AI, an educational assistant. Answer this question: {query_text}\n\nIMPORTANT: Do NOT include any external URLs or links unless they are from gamatrain.com."
             else:
                 # Build context for streaming
                 context = "\n".join([n.text for n in nodes[:3]])
@@ -473,6 +565,7 @@ You answered: {last_entry.get('response', '')[:300]}
 {history_context}IMPORTANT: Answer the question using the context above and conversation history.
 If the answer is NOT in the context, say 'I don't have information about that in my knowledge base.'
 Do NOT make up or invent any information.
+Do NOT include external links or URLs unless they are from gamatrain.com.
 
 Question: {enhanced_query}
 Answer: """
@@ -501,11 +594,37 @@ Answer: """
                             data = json.loads(line)
                             token = data.get("response", "")
                             done = data.get("done", False)
+                            
+                            # Filter external links from token
+                            token = filter_external_links(token)
+                            
                             full_response += token
                             
                             yield f"data: {json.dumps({'token': token, 'done': done})}\n\n"
                             
                             if done:
+                                # Add source links at the end if available
+                                if sources:
+                                    sources_text = format_sources_text(sources)
+                                    # Stream the sources as additional tokens
+                                    for char in sources_text:
+                                        yield f"data: {json.dumps({'token': char, 'done': False})}\n\n"
+                                        await asyncio.sleep(0.01)  # Small delay for smooth streaming
+                                    
+                                    full_response += sources_text
+                                    
+                                    # Send final message with sources metadata
+                                    yield f"data: {json.dumps({
+                                        'token': '', 
+                                        'done': True, 
+                                        'sources': sources,
+                                        'has_sources': True
+                                    })}\n\n"
+                                else:
+                                    # Filter out external links from response
+                                    full_response = filter_external_links(full_response)
+                                    yield f"data: {json.dumps({'token': '', 'done': True, 'has_sources': False})}\n\n"
+                                
                                 # Save to memory
                                 topic = ""
                                 if use_rag and nodes:
@@ -519,7 +638,8 @@ Answer: """
                                 conversation_memory[session_id].append({
                                     "query": query_text,
                                     "response": full_response,
-                                    "topic": topic
+                                    "topic": topic,
+                                    "sources": sources if sources else []
                                 })
                                 
                                 if len(conversation_memory[session_id]) > MAX_MEMORY_TURNS:
@@ -1017,6 +1137,250 @@ async def clear_session(session_id: str):
         del conversation_memory[session_id]
         return {"status": "success", "message": f"Session {session_id} cleared"}
     return {"status": "not_found", "message": f"Session {session_id} not found"}
+
+
+@app.get("/v1/stream")
+async def stream_get(query: str, session_id: str = "default"):
+    """
+    Streaming endpoint (GET) - easier to test in browser.
+    Usage: /v1/stream?query=What is Gamatrain?
+    """
+    if not query:
+        raise HTTPException(status_code=400, detail="No query provided")
+    
+    logger.info(f"Stream query: {query[:50]}...")
+    
+    return StreamingResponse(
+        stream_query(query, session_id, use_rag=True),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@app.get("/v1/search/blogs")
+async def search_blogs(q: str, limit: int = 5):
+    """
+    Search for blogs related to a query and return links.
+    Usage: /v1/search/blogs?q=photosynthesis&limit=5
+    """
+    if not q or len(q) < 2:
+        raise HTTPException(status_code=400, detail="Query too short")
+    
+    if not index_store:
+        raise HTTPException(status_code=503, detail="Index not ready")
+    
+    try:
+        # Search in RAG index
+        retriever = index_store.as_retriever(similarity_top_k=limit * 2)
+        nodes = retriever.retrieve(q)
+        
+        # Filter only blogs
+        blog_results = []
+        for node in nodes:
+            if node.metadata.get("type") == "blog":
+                text = node.text
+                title = ""
+                slug = node.metadata.get("slug", "")
+                
+                if "Blog Title:" in text:
+                    title = text.split("Blog Title:")[1].split("\n")[0].strip()
+                
+                if slug and title:
+                    blog_results.append({
+                        "title": title,
+                        "url": f"https://gamatrain.com/blog/{slug}",
+                        "slug": slug,
+                        "relevance_score": round(node.score, 3),
+                        "preview": text[:200].replace("Blog Title:", "").strip()
+                    })
+                
+                if len(blog_results) >= limit:
+                    break
+        
+        return {
+            "query": q,
+            "results_count": len(blog_results),
+            "blogs": blog_results
+        }
+    except Exception as e:
+        logger.error(f"Blog search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/search/schools")
+async def search_schools(q: str, limit: int = 5):
+    """
+    Search for schools related to a query and return links.
+    Usage: /v1/search/schools?q=MIT&limit=5
+    """
+    if not q or len(q) < 2:
+        raise HTTPException(status_code=400, detail="Query too short")
+    
+    if not index_store:
+        raise HTTPException(status_code=503, detail="Index not ready")
+    
+    try:
+        # Search in RAG index
+        retriever = index_store.as_retriever(similarity_top_k=limit * 2)
+        nodes = retriever.retrieve(q)
+        
+        # Filter only schools
+        school_results = []
+        for node in nodes:
+            if node.metadata.get("type") == "school":
+                text = node.text
+                name = ""
+                slug = node.metadata.get("slug", "")
+                
+                if "School Name:" in text:
+                    name = text.split("School Name:")[1].split("\n")[0].strip()
+                
+                if slug and name:
+                    school_results.append({
+                        "name": name,
+                        "url": f"https://gamatrain.com/schools/{slug}",
+                        "slug": slug,
+                        "relevance_score": round(node.score, 3),
+                        "info": text[:200].replace("School Name:", "").strip()
+                    })
+                
+                if len(school_results) >= limit:
+                    break
+        
+        return {
+            "query": q,
+            "results_count": len(school_results),
+            "schools": school_results
+        }
+    except Exception as e:
+        logger.error(f"School search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def format_sources_html(sources):
+    """Format sources as HTML for frontend rendering."""
+    if not sources:
+        return ""
+    
+    html = '<div class="sources-section" style="margin-top: 20px; padding: 15px; background: #f5f5f5; border-radius: 8px;">'
+    html += '<h3 style="margin: 0 0 10px 0;">📚 منابع مرتبط / Related Sources</h3>'
+    html += '<ul style="list-style: none; padding: 0; margin: 0;">'
+    
+    for source in sources:
+        if source["type"] == "blog":
+            html += f'<li style="margin: 8px 0;">'
+            html += f'📝 <a href="{source["url"]}" target="_blank" style="color: #0066cc; text-decoration: none;">{source["title"]}</a>'
+            html += f'</li>'
+        elif source["type"] == "school":
+            html += f'<li style="margin: 8px 0;">'
+            html += f'🏫 <a href="{source["url"]}" target="_blank" style="color: #0066cc; text-decoration: none;">{source["title"]}</a>'
+            html += f'</li>'
+    
+    html += '</ul></div>'
+    return html
+
+
+@app.post("/v1/query/html")
+async def query_html(request: QueryRequest):
+    """
+    Query endpoint that returns HTML-formatted response with clickable links.
+    """
+    if not request.query:
+        raise HTTPException(status_code=400, detail="No query provided")
+    
+    logger.info(f"HTML Query: {request.query[:50]}...")
+    
+    try:
+        if request.use_rag and query_engine:
+            result = query_with_threshold(request.query, request.session_id)
+            response_text = result["response"]
+            
+            # Get sources
+            sources = []
+            if index_store:
+                retriever = index_store.as_retriever(similarity_top_k=3)
+                nodes = retriever.retrieve(request.query)
+                if nodes and max([n.score for n in nodes]) >= SIMILARITY_THRESHOLD:
+                    sources = extract_source_links(nodes)
+            
+            # Format as HTML
+            html_response = f'<div class="response-text">{response_text}</div>'
+            if sources:
+                html_response += format_sources_html(sources)
+            
+            return {
+                "query": request.query,
+                "response": response_text,
+                "html": html_response,
+                "sources": sources,
+                "confidence": result["confidence"],
+                "session_id": request.session_id
+            }
+        else:
+            response = llm.complete(request.query)
+            return {
+                "query": request.query,
+                "response": str(response),
+                "html": f'<div class="response-text">{str(response)}</div>',
+                "sources": [],
+                "confidence": "direct"
+            }
+    except Exception as e:
+        logger.error(f"HTML Query error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/search/schools")
+async def search_schools(q: str, limit: int = 5):
+    """
+    Search for schools related to a query and return links.
+    Usage: /v1/search/schools?q=MIT&limit=5
+    """
+    if not q or len(q) < 2:
+        raise HTTPException(status_code=400, detail="Query too short")
+    
+    if not index_store:
+        raise HTTPException(status_code=503, detail="Index not ready")
+    
+    try:
+        # Search in RAG index
+        retriever = index_store.as_retriever(similarity_top_k=limit * 2)
+        nodes = retriever.retrieve(q)
+        
+        # Filter only schools
+        school_results = []
+        for node in nodes:
+            if node.metadata.get("type") == "school":
+                text = node.text
+                name = ""
+                slug = node.metadata.get("slug", "")
+                
+                if "School Name:" in text:
+                    name = text.split("School Name:")[1].split("\n")[0].strip()
+                
+                if slug and name:
+                    school_results.append({
+                        "name": name,
+                        "url": f"https://gamatrain.com/schools/{slug}",
+                        "slug": slug,
+                        "relevance_score": round(node.score, 3),
+                        "info": text[:200].replace("School Name:", "").strip()
+                    })
+                
+                if len(school_results) >= limit:
+                    break
+        
+        return {
+            "query": q,
+            "results_count": len(school_results),
+            "schools": school_results
+        }
+    except Exception as e:
+        logger.error(f"School search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/v1/stream")
