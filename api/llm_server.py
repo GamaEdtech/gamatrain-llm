@@ -334,8 +334,8 @@ async def stream_query(query_text: str, session_id: str = "default", use_rag: bo
     import re
 
     query_lower = query_text.lower().strip()
-    query_normalized = re.sub(r\"[^\w\s]\", \" \", query_lower)
-    query_normalized = \" \".join(query_normalized.split())
+    query_normalized = re.sub(r"[^\w\s]", " ", query_lower)
+    query_normalized = " ".join(query_normalized.split())
     nodes = []  # Initialize nodes to avoid reference error
     sources = []  # Store source links
     
