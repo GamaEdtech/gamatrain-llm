@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files (too large for Git)
+*.gguf
+*.bin
+*.safetensors
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+test_report_*.json
+test_random_blogs_*.json
+
+# Environment
+.env
+.env.local
+token.txt
+gpg
+
+# Storage (regenerated on startup)
+storage/
+api/storage/

@@ -1,0 +1,23 @@
+# Gamatrain AI Server - Production Dockerfile
+# No GPU needed
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY api/requirements-production.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application
+COPY api/llm_server_production.py .
+COPY data/ ./data/
+COPY storage/ ./storage/
+
+# Environment variables
+ENV HOST=0.0.0.0
+ENV PORT=8000
+
+EXPOSE 8000
+
+CMD ["python", "llm_server_production.py"]

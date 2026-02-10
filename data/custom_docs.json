@@ -1,0 +1,29 @@
+{
+  "documents": [
+    {
+      "text": "Gamatrain AI can help students with math, science, and language learning. It provides personalized tutoring based on each student's level.",
+      "type": "faq",
+      "id": "faq_001"
+    },
+    {
+      "text": "To reset your Gamatrain password, go to Settings > Account > Reset Password. You will receive an email with instructions.",
+      "type": "faq",
+      "id": "faq_002"
+    },
+    {
+      "text": "Gamatrain supports Persian (Farsi), English, and Arabic languages for educational content.",
+      "type": "faq",
+      "id": "faq_003"
+    },
+    {
+      "text": "The Gamatrain mobile app is available on both iOS and Android. Download from App Store or Google Play.",
+      "type": "faq",
+      "id": "faq_004"
+    },
+    {
+      "text": "Gamatrain pricing: Free tier includes basic features. Premium subscription costs $9.99/month with full access to all courses.",
+      "type": "pricing",
+      "id": "pricing_001"
+    }
+  ]
+}
