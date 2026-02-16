@@ -404,26 +404,43 @@ def fetch_documents():
 
 def build_index(documents: List[Document]):
     """Build or load RAG index."""
-    global query_engine, index_store
+    global query_engine, index_store, embed_model
+    
+    # CRITICAL: Make sure embed_model is set before loading/building index
+    if embed_model is None:
+        logger.error("Embed model not initialized! Call setup_embeddings() first.")
+        raise RuntimeError("Embed model not initialized")
     
     # Try to load existing index
     if os.path.exists(os.path.join(STORAGE_DIR, "docstore.json")):
         try:
             logger.info("Loading existing index...")
-            storage_context = StorageContext.from_defaults(persist_dir=STORAGE_DIR)
-            index_store = load_index_from_storage(storage_context)
+            storage_context = StorageContext.from_defaults(
+                persist_dir=STORAGE_DIR,
+                embed_model=embed_model  # CRITICAL: Pass embed_model when loading
+            )
+            index_store = load_index_from_storage(
+                storage_context,
+                embed_model=embed_model  # CRITICAL: Pass embed_model when loading
+            )
             query_engine = index_store.as_retriever(similarity_top_k=3)
-            logger.info("Index loaded")
+            logger.info("Index loaded successfully with HuggingFace embeddings")
             return
         except Exception as e:
             logger.warning(f"Could not load index: {e}")
+            logger.info("Will rebuild index from scratch...")
     
     # Build new index
     logger.info(f"Building index with {len(documents)} documents...")
-    index_store = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
+    logger.info("Using HuggingFace embedding model (intfloat/multilingual-e5-large)")
+    index_store = VectorStoreIndex.from_documents(
+        documents, 
+        embed_model=embed_model,  # CRITICAL: Use HuggingFace, not OpenAI
+        show_progress=True
+    )
     index_store.storage_context.persist(persist_dir=STORAGE_DIR)
     query_engine = index_store.as_retriever(similarity_top_k=3)
-    logger.info("Index built and saved")
+    logger.info("Index built and saved successfully")
 
 
 async def rewrite_query_with_context(query: str, history: list) -> tuple:
