@@ -8,12 +8,37 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - HF_MODEL_ID=Ritalleral/qwen2-gamatrain
-      - HF_API_TOKEN=${HF_API_TOKEN}
-      - GAMATRAIN_API_URL=https://185.204.170.142/api/v1
-      - SIMILARITY_THRESHOLD=0.65
-      - MAX_TOKENS=1024
+      # Provider Selection (ollama, groq, or openrouter)
+      - PROVIDER=${PROVIDER:-ollama}
+      
+      # Ollama Settings (if using local Ollama)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gamatrain-qwen2.5}
+      
+      # Groq Settings (if using Groq - FREE!)
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
+      
+      # OpenRouter Settings (if using OpenRouter)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-meta-llama/llama-3.1-8b-instruct:free}
+      
+      # Gamatrain API
+      - GAMATRAIN_API_URL=${GAMATRAIN_API_URL:-https://api.gamaedtech.com/api/v1}
+      - GAMATRAIN_AUTH_TOKEN=${GAMATRAIN_AUTH_TOKEN:-}
+      
+      # RAG Settings
+      - STORAGE_DIR=/app/storage
+      - CUSTOM_DOCS_PATH=/app/data/custom_docs.json
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.45}
+      - MAX_TOKENS=${MAX_TOKENS:-1024}
+      
+      # Server Settings
+      - HOST=0.0.0.0
+      - PORT=8000
     volumes:
       - ./storage:/app/storage
       - ./data:/app/data
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

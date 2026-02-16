@@ -1,11 +1,16 @@
 # Gamatrain AI Server - Production Dockerfile
-# No GPU needed
+# No GPU needed - Uses HuggingFace embeddings
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Install system dependencies for sentence-transformers
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
 COPY api/requirements-production.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -17,6 +22,15 @@ RUN mkdir -p ./storage/
 # Environment variables
 ENV HOST=0.0.0.0
 ENV PORT=8000
+ENV STORAGE_DIR=/app/storage
+ENV CUSTOM_DOCS_PATH=/app/data/custom_docs.json
+ENV SIMILARITY_THRESHOLD=0.45
+ENV MAX_TOKENS=1024
+
+# Provider settings (default to ollama)
+ENV PROVIDER=ollama
+ENV OLLAMA_BASE_URL=http://host.docker.internal:11434
+ENV OLLAMA_MODEL=gamatrain-qwen2.5
 
 EXPOSE 8000
 

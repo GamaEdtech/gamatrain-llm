@@ -1,87 +1,151 @@
-# Gamatrain AI Server
+# Gamatrain AI API - Production Server
 
-FastAPI server with RAG, conversation memory, and multi-provider LLM support.
+Production-ready API server with RAG (Retrieval-Augmented Generation) using HuggingFace embeddings.
 
 ## Features
 
-- **RAG (Retrieval-Augmented Generation)**: Smart search across 2000+ blogs
-- **Conversation Memory**: Remembers last 5 messages per session
-- **Follow-up Detection**: Handles "tell me more" style questions
-- **Multi-Provider**: Supports Ollama (local), Groq (cloud), OpenRouter
-- **Streaming**: Real-time token streaming for better UX
+- ✅ **Free embeddings** - Uses HuggingFace instead of OpenAI (no API key needed)
+- ✅ **Multilingual support** - Excellent for Persian/Farsi and 100+ languages
+- ✅ **Multiple LLM providers** - Ollama (local), Groq (cloud-free), OpenRouter
+- ✅ **RAG with conversation memory** - Context-aware responses
+- ✅ **Streaming responses** - Real-time token streaming
+- ✅ **Docker ready** - Easy deployment
 
 ## Quick Start
 
-### Development (with Ollama)
+### Local Development
 
 ```bash
-pip install -r requirements.txt
-python llm_server.py
-# Server runs on http://localhost:8000
+# Install dependencies
+pip install -r requirements-production.txt
+
+# Set environment variables
+cp .env.production.example .env
+nano .env
+
+# Run server
+python llm_server_production.py
 ```
 
-### Production (with Groq - Free)
+### Docker Deployment
+
+See [DOCKER_DEPLOYMENT.md](../DOCKER_DEPLOYMENT.md) for detailed instructions.
 
 ```bash
-cp .env.production.example .env
-# Edit .env and add your GROQ_API_KEY
+# Quick start
+docker-compose -f docker-compose.production.yml up -d
+```
 
-pip install -r requirements-production.txt
-python llm_server_production.py
-# Server runs on http://localhost:8002
+## Configuration
+
+### Environment Variables
+
+```env
+# Provider (ollama, groq, or openrouter)
+PROVIDER=ollama
+
+# Ollama settings
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=gamatrain-qwen2.5
+
+# Groq settings (free!)
+GROQ_API_KEY=your_key_here
+GROQ_MODEL=llama-3.1-8b-instant
+
+# Storage
+STORAGE_DIR=./storage
+SIMILARITY_THRESHOLD=0.45
 ```
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/v1/query` | Query with RAG and streaming |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible endpoint |
-| `POST` | `/v1/regenerate` | Regenerate last response |
-| `POST` | `/v1/refresh` | Refresh RAG index |
-| `DELETE` | `/v1/session/{id}` | Clear session memory |
-| `GET` | `/health` | Health check |
-| `GET` | `/v1/debug/search?q=...` | Debug: search with scores |
-
-## Example Request
-
+### Health Check
 ```bash
-# Send a query
-curl -X POST "http://localhost:8002/v1/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is machine learning?", "session_id": "user123"}'
-
-# Regenerate the last response
-curl -X POST "http://localhost:8002/v1/regenerate" \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "user123", "use_rag": true, "stream": false}'
+GET /health
 ```
 
-## Regenerate Response Feature
-
-The `/v1/regenerate` endpoint allows users to regenerate the last AI response, similar to ChatGPT's regenerate button.
-
-**How it works:**
-1. Retrieves the last user query from conversation memory
-2. Removes the previous response
-3. Generates a new response with the same query
-
-**Quick test:**
+### Query
 ```bash
+POST /query
+{
+  "query": "What is Gamatrain?",
+  "session_id": "user123",
+  "use_rag": true
+}
 ```
 
-## Environment Variables
+### Stream Query
+```bash
+POST /stream
+{
+  "query": "Explain machine learning",
+  "session_id": "user123"
+}
+```
 
-See `.env.production.example` for all available options.
+### Regenerate Response
+```bash
+POST /v1/regenerate
+{
+  "session_id": "user123",
+  "use_rag": true,
+  "stream": false
+}
+```
 
-Key variables:
-- `PROVIDER`: `ollama`, `groq`, or `openrouter`
-- `GROQ_API_KEY`: Get free key from https://console.groq.com
-- `SIMILARITY_THRESHOLD`: RAG confidence threshold (default: 0.45)
+### Clear Session
+```bash
+DELETE /v1/session/{session_id}
+```
+
+## Embedding Model
+
+Uses `intfloat/multilingual-e5-large`:
+- Size: ~2GB
+- Dimensions: 1024
+- Languages: 100+ including Persian/Farsi
+- Quality: Excellent for RAG
+
+**Note:** Model downloads on first run (~5-10 minutes).
+
+## Troubleshooting
+
+### "Could not load OpenAI embedding model"
+
+Old index was built with OpenAI. Clean storage:
+```bash
+rm -rf storage/*
+```
+
+### "Connection refused" (Ollama)
+
+Make sure Ollama is running:
+```bash
+ollama list
+```
+
+Or use Groq instead:
+```env
+PROVIDER=groq
+GROQ_API_KEY=your_key_here
+```
+
+### Model download takes long
+
+First run downloads ~2GB embedding model. This is normal and only happens once.
+
+## Requirements
+
+- Python 3.11+
+- 4GB+ RAM (8GB recommended)
+- 5GB+ disk space
 
 ## Files
 
-- `llm_server.py` - Development server (uses local Ollama)
-- `llm_server_production.py` - Production server (multi-provider)
-- `requirements.txt` - Development dependencies
+- `llm_server_production.py` - Production server
 - `requirements-production.txt` - Production dependencies
+- `.env.production.example` - Example configuration
+
+## License
+
+See [LICENSE](../LICENSE) file.

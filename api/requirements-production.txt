@@ -1,20 +1,21 @@
 # Gamatrain AI Server - Production Requirements
 # No GPU needed - uses HuggingFace Inference API
+# Compatible with Python 3.12
 
 # Web Framework
-fastapi==0.109.0
-uvicorn==0.27.0
-httpx==0.26.0
+fastapi>=0.109.0
+uvicorn>=0.27.0
+httpx>=0.26.0
 
-# RAG (runs on CPU)
-llama-index==0.10.0
-llama-index-embeddings-huggingface==0.1.0
+# RAG (runs on CPU) - Updated for Python 3.12 compatibility
+llama-index>=0.10.13
+llama-index-embeddings-huggingface>=0.2.0
 
 # HuggingFace
-huggingface_hub==0.20.0
-transformers==4.37.0
-sentence-transformers==2.3.0
+huggingface_hub>=0.20.0
+transformers>=4.37.0
+sentence-transformers>=2.3.0
 
 # Utilities
-pydantic==2.5.0
-python-dotenv==1.0.0
+pydantic>=2.5.0
+python-dotenv>=1.0.0
