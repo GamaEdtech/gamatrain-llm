@@ -26,8 +26,6 @@ from pydantic import BaseModel
 
 from llama_index.core import VectorStoreIndex, Document, StorageContext, load_index_from_storage
 from llama_index.core.prompts import PromptTemplate
-from llama_index.llms.ollama import Ollama
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 # Global embedding model
 embed_model = None
@@ -41,6 +39,7 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 STORAGE_DIR = os.getenv("STORAGE_DIR", "./storage")
 CUSTOM_DOCS_PATH = os.getenv("CUSTOM_DOCS_PATH", "../data/custom_docs.json")
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 # Gamatrain API
 API_BASE_URL = os.getenv("GAMATRAIN_API_URL", "https://api.gamaedtech.com/api/v1")
@@ -68,7 +67,10 @@ def setup_llm():
     """Initialize LLM and embedding model."""
     global llm, embed_model
     logger.info(f"Setting up LLM: {MODEL_NAME}")
-    
+
+    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+    from llama_index.llms.ollama import Ollama
+
     llm = Ollama(model=MODEL_NAME, base_url=OLLAMA_BASE_URL, request_timeout=120.0)
     embed_model = HuggingFaceEmbedding(model_name="intfloat/multilingual-e5-large")
     
@@ -105,7 +107,7 @@ def fetch_documents():
     
     # Fetch ALL blogs with full content
     try:
-        with httpx.Client(verify=False, timeout=120) as client:
+        with httpx.Client(verify=VERIFY_SSL, timeout=120) as client:
             resp = client.get(
                 f"{API_BASE_URL}/blogs/posts",
                 params={
@@ -153,7 +155,7 @@ def fetch_documents():
     
     # Fetch schools (get more schools with detailed info)
     try:
-        with httpx.Client(verify=False, timeout=60) as client:
+        with httpx.Client(verify=VERIFY_SSL, timeout=60) as client:
             resp = client.get(
                 f"{API_BASE_URL}/schools",
                 params={"PagingDto.PageFilter.Size": 1000, "PagingDto.PageFilter.Skip": 0},
@@ -194,30 +196,47 @@ def fetch_documents():
 
 def build_index(documents: List[Document]):
     """Build or load RAG index."""
-    global query_engine, index_store, embed_model
-    
-    # CRITICAL: Make sure embed_model is set before loading/building index
+    global query_engine, index_store, embed_model, llm
+
     if embed_model is None:
-        logger.error("Embed model not initialized! Call setup_embeddings() first.")
+        logger.error("Embed model not initialized! Call setup_llm() first.")
         raise RuntimeError("Embed model not initialized")
+    
+    # Custom QA prompt to reduce hallucination
+    qa_prompt = PromptTemplate(
+        "Context information is below.\n"
+        "---------------------\n"
+        "{context_str}\n"
+        "---------------------\n"
+        "IMPORTANT: Answer the question ONLY using the context above. "
+        "If the answer is NOT in the context, say 'I don't have information about that in my knowledge base.' "
+        "Do NOT make up or invent any information.\n\n"
+        "Question: {query_str}\n"
+        "Answer: "
+    )
     
     # Check if index already exists
     index_path = os.path.join(STORAGE_DIR, "docstore.json")
     
     if os.path.exists(index_path):
         try:
-            logger.info("📦 Loading existing index from storage...")
+            logger.info("Loading existing index from storage...")
             storage_context = StorageContext.from_defaults(
                 persist_dir=STORAGE_DIR,
-                embed_model=embed_model
+                embed_model=embed_model,
             )
             index_store = load_index_from_storage(
                 storage_context,
-                embed_model=embed_model
+                embed_model=embed_model,
             )
-            query_engine = index_store.as_retriever(similarity_top_k=3)
-            logger.info("✅ Index loaded successfully (no rebuild needed)")
-            return  # Exit early - no need to rebuild
+            query_engine = index_store.as_query_engine(
+                similarity_top_k=3,
+                response_mode="compact",
+                text_qa_template=qa_prompt,
+                llm=llm,
+            )
+            logger.info("Index loaded successfully")
+            return query_engine
         except Exception as e:
             logger.warning(f"⚠️  Could not load index: {e}")
             logger.info("🔨 Will rebuild index from scratch...")
@@ -405,7 +424,7 @@ User's follow-up question: {query_text}
 Continue explaining in detail:"""
             
             # Stream directly without RAG
-            async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+            async with httpx.AsyncClient(timeout=120.0, verify=VERIFY_SSL) as client:
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_BASE_URL}/api/generate",
@@ -479,7 +498,7 @@ If the information above doesn't contain the answer, say so honestly."""
 {query_text}"""
                 
                 # Skip RAG retrieval, go directly to LLM
-                async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+                async with httpx.AsyncClient(timeout=120.0, verify=VERIFY_SSL) as client:
                     async with client.stream(
                         "POST",
                         f"{OLLAMA_BASE_URL}/api/generate",
@@ -573,7 +592,7 @@ Answer: """
             prompt = query_text
         
         # Stream from Ollama
-        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=VERIFY_SSL) as client:
             async with client.stream(
                 "POST",
                 f"{OLLAMA_BASE_URL}/api/generate",
@@ -1377,77 +1396,6 @@ async def query_html(request: QueryRequest):
     except Exception as e:
         logger.error(f"HTML Query error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/v1/search/schools")
-async def search_schools(q: str, limit: int = 5):
-    """
-    Search for schools related to a query and return links.
-    Usage: /v1/search/schools?q=MIT&limit=5
-    """
-    if not q or len(q) < 2:
-        raise HTTPException(status_code=400, detail="Query too short")
-    
-    if not index_store:
-        raise HTTPException(status_code=503, detail="Index not ready")
-    
-    try:
-        # Search in RAG index
-        retriever = index_store.as_retriever(similarity_top_k=limit * 2)
-        nodes = retriever.retrieve(q)
-        
-        # Filter only schools
-        school_results = []
-        for node in nodes:
-            if node.metadata.get("type") == "school":
-                text = node.text
-                name = ""
-                slug = node.metadata.get("slug", "")
-                
-                if "School Name:" in text:
-                    name = text.split("School Name:")[1].split("\n")[0].strip()
-                
-                if slug and name:
-                    school_results.append({
-                        "name": name,
-                        "url": f"https://gamatrain.com/schools/{slug}",
-                        "slug": slug,
-                        "relevance_score": round(node.score, 3),
-                        "info": text[:200].replace("School Name:", "").strip()
-                    })
-                
-                if len(school_results) >= limit:
-                    break
-        
-        return {
-            "query": q,
-            "results_count": len(school_results),
-            "schools": school_results
-        }
-    except Exception as e:
-        logger.error(f"School search error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/v1/stream")
-async def stream_get(query: str, session_id: str = "default"):
-    """
-    Streaming endpoint (GET) - easier to test in browser.
-    Usage: /v1/stream?query=What is Gamatrain?
-    """
-    if not query:
-        raise HTTPException(status_code=400, detail="No query provided")
-    
-    logger.info(f"Stream query: {query[:50]}...")
-    
-    return StreamingResponse(
-        stream_query(query, session_id, use_rag=True),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-    )
 
 
 # =============================================================================

@@ -11,14 +11,27 @@ Usage:
     3. Add the endpoints to your FastAPI app
 """
 
+import logging
 import os
 import pickle
-import numpy as np
-import faiss
 from typing import List, Optional
+
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
+
+try:
+    import faiss
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+
+    FAISS_AVAILABLE = True
+except ImportError:
+    faiss = None
+    np = None
+    SentenceTransformer = None
+    FAISS_AVAILABLE = False
 
 # =============================================================================
 # Configuration
@@ -53,33 +66,33 @@ class FAISSSearchResult(BaseModel):
 def load_faiss_index():
     """Load FAISS index and metadata on startup."""
     global faiss_index, faiss_metadata, faiss_embed_model
-    
+
+    if not FAISS_AVAILABLE:
+        logger.warning("faiss-cpu not installed; FAISS search disabled")
+        return False
+
     if not os.path.exists(FAISS_INDEX_PATH):
-        print(f"⚠️  FAISS index not found at {FAISS_INDEX_PATH}")
-        print("   Run 'python build_faiss_store.py' to create the index")
+        logger.warning("FAISS index not found at %s (run build_faiss_store.py)", FAISS_INDEX_PATH)
         return False
-    
+
     if not os.path.exists(METADATA_PATH):
-        print(f"⚠️  FAISS metadata not found at {METADATA_PATH}")
+        logger.warning("FAISS metadata not found at %s", METADATA_PATH)
         return False
-    
+
     try:
-        print("Loading FAISS index...")
+        logger.info("Loading FAISS index...")
         faiss_index = faiss.read_index(FAISS_INDEX_PATH)
-        print(f"✔️  FAISS index loaded ({faiss_index.ntotal} vectors)")
-        
-        print("Loading FAISS metadata...")
+        logger.info("FAISS index loaded (%s vectors)", faiss_index.ntotal)
+
         with open(METADATA_PATH, "rb") as f:
             faiss_metadata = pickle.load(f)
-        print(f"✔️  Metadata loaded ({len(faiss_metadata['ids'])} entries)")
-        
-        print("Loading FAISS embedding model...")
-        faiss_embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("✔️  Embedding model loaded")
-        
+        logger.info("FAISS metadata loaded (%s entries)", len(faiss_metadata["ids"]))
+
+        faiss_embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        logger.info("FAISS embedding model loaded")
         return True
     except Exception as e:
-        print(f"❌ Error loading FAISS: {e}")
+        logger.error("Error loading FAISS: %s", e)
         return False
 
 
@@ -96,7 +109,10 @@ def search_faiss(query: str, k: int = 5, min_score: float = 0.0) -> List[dict]:
         List of search results with school_id, text, and similarity_score
     """
     global faiss_index, faiss_metadata, faiss_embed_model
-    
+
+    if not FAISS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="FAISS is not installed (faiss-cpu required)")
+
     if faiss_index is None or faiss_metadata is None or faiss_embed_model is None:
         raise HTTPException(
             status_code=503,
@@ -208,9 +224,10 @@ def add_faiss_endpoints(app):
         # Add endpoints:
         add_faiss_endpoints(app)
     """
+    if not FAISS_AVAILABLE:
+        logger.warning("faiss-cpu not installed; skipping FAISS endpoints")
+        return
+
     app.post("/v1/search/faiss")(faiss_search_endpoint)
     app.get("/v1/search/faiss/health")(faiss_health_endpoint)
-    
-    print("✔️  FAISS endpoints added:")
-    print("   POST /v1/search/faiss")
-    print("   GET  /v1/search/faiss/health")
+    logger.info("FAISS endpoints added: POST /v1/search/faiss, GET /v1/search/faiss/health")

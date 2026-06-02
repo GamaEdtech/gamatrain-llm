@@ -34,6 +34,8 @@ test_random_blogs_*.json
 # Environment
 .env
 .env.local
+.env.docker
+.env.docker.local
 token.txt
 gpg
 

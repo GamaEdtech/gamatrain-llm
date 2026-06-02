@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt -r requirements-dev.txt
+
+      - name: Verify modular app import
+        env:
+          ENABLE_RAG: "false"
+          PYTHONUTF8: "1"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -c "from api.app.main import app; print('modular routes', len(app.routes))" \
+            || (echo "::error::Failed to import api.app.main" && exit 1)
+
+      - name: Run tests
+        env:
+          ENABLE_RAG: "false"
+          PYTHONUTF8: "1"
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -v --tb=long
+

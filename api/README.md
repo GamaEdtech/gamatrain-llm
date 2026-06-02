@@ -110,6 +110,15 @@ Uses `intfloat/multilingual-e5-large`:
 
 ## Troubleshooting
 
+### Start without downloading the embedding model
+
+If you want to start the modular server **without downloading** the HuggingFace embedding model (disables RAG):
+
+```bash
+set ENABLE_RAG=false
+python llm_server_modular.py
+```
+
 ### "Could not load OpenAI embedding model"
 
 Old index was built with OpenAI. Clean storage:

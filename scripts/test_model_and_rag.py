@@ -27,7 +27,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Configuration
 MODEL_NAME = "gamatrain-qwen"
 API_BASE_URL = "https://api.gamaedtech.com/api/v1"
-AUTH_TOKEN = "1735%7CCfDJ8AHj4VWfmz9DpMpNxts7109iJyV5YLZVw3PwbvKW5DKqAEgJJH9q%2FbrwZH5%2Bea87uMdj4LXj58uTZ7snP8YcRP36uezVDspGvzUhEQTQ5Du4icTip2mah0Cq4C86s%2Bpy31PAxl%2FpsRIJXlugy7EmHgSgq9sOgSW9YPr%2BB1Pf2gdT4umedbopK1a0%2F6YKPrBL2Q9%2BNM2XzeBSmFcgXEvsT5rP28t%2BUIC2veZU99lS2849"
+AUTH_TOKEN = os.getenv("GAMATRAIN_AUTH_TOKEN", "")
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 # Test results storage
 results = {
@@ -64,13 +65,18 @@ def setup_llm():
 
 
 def fetch_api_data():
+    if not AUTH_TOKEN:
+        raise RuntimeError(
+            "GAMATRAIN_AUTH_TOKEN is not set. Export it as an environment variable before running this script."
+        )
+
     headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
     
     # Fetch blogs
     url = f"{API_BASE_URL}/blogs/posts"
     params = {"PagingDto.PageFilter.Size": 50, "PagingDto.PageFilter.Skip": 0}
     try:
-        resp = requests.get(url, params=params, headers=headers, verify=False, timeout=30)
+        resp = requests.get(url, params=params, headers=headers, verify=VERIFY_SSL, timeout=30)
         blogs = resp.json().get("data", {}).get("list", []) if resp.status_code == 200 else []
     except:
         blogs = []
@@ -78,7 +84,7 @@ def fetch_api_data():
     # Fetch schools
     url = f"{API_BASE_URL}/schools"
     try:
-        resp = requests.get(url, params=params, headers=headers, verify=False, timeout=30)
+        resp = requests.get(url, params=params, headers=headers, verify=VERIFY_SSL, timeout=30)
         schools = resp.json().get("data", {}).get("list", []) if resp.status_code == 200 else []
     except:
         schools = []
